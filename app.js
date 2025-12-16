@@ -1,8 +1,20 @@
 // ================= CONFIG =================
-const TOTAL_CHUNKS = 17;          // поставь своё число
-const USE_SINGLE_FILE = false;
+const TOTAL_CHUNKS = 8;          // поставь своё реальное число чанков
+const USE_SINGLE_FILE = false;    // если сделаешь один файл — можно true
+const RECIPES_FILE = "recipes_all.json";
+
 const ONNX_URL =
   "https://huggingface.co/iammik3e/recsys-minilm/resolve/main/model.onnx";
+
+// Diet exclusions (как раньше)
+const DIET_EXCLUSIONS = {
+  vegetarian: ["chicken", "beef", "pork", "fish", "meat", "bacon", "ham"],
+  vegan: [
+    "meat", "chicken", "beef", "fish",
+    "milk", "cheese", "egg", "butter", "cream", "yogurt", "honey"
+  ],
+  nopork: ["pork", "bacon", "ham", "prosciutto", "salami", "pepperoni"]
+};
 
 // ================= STATE =================
 let recipes = [];
@@ -16,6 +28,10 @@ const results = document.getElementById("results");
 const searchBtn = document.getElementById("searchBtn");
 const ingredientsInput = document.getElementById("ingredientsInput");
 const topN = document.getElementById("topN");
+
+const dietVegetarian = document.getElementById("dietVegetarian");
+const dietVegan = document.getElementById("dietVegan");
+const dietNoPork = document.getElementById("dietNoPork");
 
 // ================= ONNX =================
 async function loadONNXRuntime() {
@@ -63,22 +79,17 @@ async function embed(text) {
   const out = await session.run({
     input_ids: makeTensor(tok.ids),
     attention_mask: new ort.Tensor("int64", mask, [1, 128]),
-    token_type_ids: new ort.Tensor(
-      "int64",
-      new BigInt64Array(128),
-      [1, 128]
-    ),
+    token_type_ids: new ort.Tensor("int64", new BigInt64Array(128), [1, 128]),
   });
 
   const key = Object.keys(out)[0];
   const data = out[key].data;
   const hidden = out[key].dims[2];
 
+  // mean pooling по токенам
   const emb = new Array(hidden).fill(0);
   for (let i = 0; i < hidden; i++) {
-    for (let j = 0; j < tok.len; j++) {
-      emb[i] += data[j * hidden + i];
-    }
+    for (let j = 0; j < tok.len; j++) emb[i] += data[j * hidden + i];
     emb[i] /= tok.len;
   }
   return emb;
@@ -86,6 +97,11 @@ async function embed(text) {
 
 // ================= DATA =================
 async function loadChunks() {
+  if (USE_SINGLE_FILE) {
+    recipes = await fetch(RECIPES_FILE).then((r) => r.json());
+    return;
+  }
+
   const parts = await Promise.all(
     Array.from({ length: TOTAL_CHUNKS }, (_, i) =>
       fetch(`chunks/part${i + 1}.json`)
@@ -93,14 +109,13 @@ async function loadChunks() {
         .catch(() => [])
     )
   );
+
   recipes = parts.flat();
 }
 
 // ================= UTILS =================
 function cosine(a, b) {
-  let d = 0,
-    na = 0,
-    nb = 0;
+  let d = 0, na = 0, nb = 0;
   for (let i = 0; i < a.length; i++) {
     d += a[i] * b[i];
     na += a[i] * a[i];
@@ -109,7 +124,19 @@ function cosine(a, b) {
   return d / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
+function normalizeText(s) {
+  return (s || "").toLowerCase();
+}
+
+function recipeTextForFilter(r) {
+  // фильтруем по ингредиентам + названию (надёжнее)
+  const title = normalizeText(r.title);
+  const ing = Array.isArray(r.ingredients) ? r.ingredients.join(" ") : "";
+  return `${title} ${normalizeText(ing)}`;
+}
+
 function getRecipeImage(r) {
+  // локальная картинка из папки images/
   return r.image ? `images/${r.image}` : "placeholder.jpg";
 }
 
@@ -118,33 +145,60 @@ async function recommend() {
   const query = ingredientsInput.value.trim();
   if (!query) return;
 
-  loading.textContent = "Searching…";
+  // exclusions
+  let excluded = [];
+  if (dietVegetarian.checked) excluded.push(...DIET_EXCLUSIONS.vegetarian);
+  if (dietVegan.checked) excluded.push(...DIET_EXCLUSIONS.vegan);
+  if (dietNoPork.checked) excluded.push(...DIET_EXCLUSIONS.nopork);
 
+  loading.textContent = "Encoding…";
+  results.innerHTML = "";
+
+  // эмбедим запрос (как раньше)
   const userEmb = await embed(`Ingredients: ${query}`);
 
-  const scored = recipes
-    .map((r) => ({
-      r,
-      score: cosine(userEmb, r.embedding),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, parseInt(topN.value));
+  loading.textContent = "Scoring…";
 
+  // фильтрация по диетам
+  const filtered = excluded.length
+    ? recipes.filter((r) => {
+        const text = recipeTextForFilter(r);
+        return !excluded.some((e) => text.includes(e));
+      })
+    : recipes;
+
+  const n = parseInt(topN.value, 10);
+
+  const scored = filtered
+    .map((r) => ({ r, score: cosine(userEmb, r.embedding) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, n);
+
+  // рендер
   results.innerHTML = "";
   scored.forEach(({ r, score }) => {
+    const title = r.title || "Untitled recipe";
+    const ing = Array.isArray(r.ingredients) ? r.ingredients.join(", ") : "";
+    const instr = (r.instructions || "").trim();
+
     results.innerHTML += `
       <div class="recipe-card">
-        <img src="${getRecipeImage(r)}" alt="${r.title}">
+        <img
+          src="${getRecipeImage(r)}"
+          alt="${title}"
+          onerror="this.onerror=null;this.src='placeholder.jpg';"
+        >
         <div class="card-body">
-          <h3>${r.title}</h3>
+          <h3>${title}</h3>
           <div class="score">Similarity: ${score.toFixed(3)}</div>
-          <div class="ingredients">
-            ${r.ingredients.join(", ")}
-          </div>
-          <details>
-            <summary>Instructions</summary>
-            <p>${r.instructions}</p>
-          </details>
+          <div class="ingredients">${ing}</div>
+
+          ${instr ? `
+            <details>
+              <summary>Instructions</summary>
+              <p class="instructions">${instr}</p>
+            </details>
+          ` : ""}
         </div>
       </div>
     `;
@@ -159,8 +213,14 @@ async function init() {
   await loadTokenizer();
   await loadModel();
   await loadChunks();
-  loading.textContent = "Ready ✓";
+  loading.textContent = `Ready ✓ (${recipes.length} recipes)`;
 }
 
 searchBtn.onclick = recommend;
+
+// enter = поиск
+ingredientsInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") recommend();
+});
+
 init();
