@@ -1,6 +1,6 @@
 // ================= CONFIG =================
-const TOTAL_CHUNKS = 17;
-const USE_SINGLE_FILE = true;
+const TOTAL_CHUNKS = 8;
+const USE_SINGLE_FILE = false;
 const RECIPES_FILE = "recipes_all.json";
 
 const ONNX_URL =
