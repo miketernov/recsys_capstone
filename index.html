@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Recipe Recommender</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:," />
+</head>
+<body>
+
+<h1>🍽️ Recipe Recommender</h1>
+
+<input
+  id="ingredientsInput"
+  placeholder="Enter ingredients (e.g. chicken garlic butter)"
+/>
+
+<div class="diet-box">
+  <label><input type="checkbox" id="dietVegetarian"> Vegetarian</label>
+  <label><input type="checkbox" id="dietVegan"> Vegan</label>
+  <label><input type="checkbox" id="dietNoPork"> No pork</label>
+</div>
+
+<label class="topn">
+  Results:
+  <select id="topN">
+    <option value="3">Top 3</option>
+    <option value="5">Top 5</option>
+    <option value="10" selected>Top 10</option>
+  </select>
+</label>
+
+<button id="searchBtn">Find Recipes</button>
+
+<p id="loading"></p>
+
+<div id="results"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
