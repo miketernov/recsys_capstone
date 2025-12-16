@@ -33,6 +33,20 @@ const dietVegetarian = document.getElementById("dietVegetarian");
 const dietVegan = document.getElementById("dietVegan");
 const dietNoPork = document.getElementById("dietNoPork");
 
+const loader = document.getElementById("loader");
+const loaderText = document.getElementById("loaderText");
+const progressFill = document.getElementById("progressFill");
+
+function setProgress(percent, text) {
+  loader.classList.remove("hidden");
+  progressFill.style.width = percent + "%";
+  if (text) loaderText.textContent = text;
+}
+
+function hideLoader() {
+  loader.classList.add("hidden");
+}
+
 // ================= ONNX RUNTIME (СТАРЫЙ РАБОЧИЙ ВАРИАНТ) =================
 async function loadONNXRuntime() {
   try {
@@ -221,12 +235,19 @@ async function recommend() {
 
 // ================= INIT =================
 async function init() {
-  loading.textContent = "Loading…";
+  setProgress(10, "Loading tokenizer…");
   await loadTokenizer();
+
+  setProgress(40, "Loading ML model…");
   await loadModel();
+
+  setProgress(70, "Loading recipes…");
   await loadChunks();
+
+  setProgress(100, "Ready ✓");
   ready = true;
-  loading.textContent = "Ready ✓";
+
+  setTimeout(hideLoader, 500);
 }
 
 searchBtn.onclick = recommend;
