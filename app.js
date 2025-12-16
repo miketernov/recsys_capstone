@@ -170,8 +170,8 @@ function recipeText(r) {
 }
 
 function getRecipeImage(r) {
-  if (r.image_name) {
-    return `images/${r.image_name}`;
+  if (r.image) {
+    return `images/${r.image}.jpg`;
   }
   return "placeholder.jpg";
 }
