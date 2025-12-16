@@ -170,7 +170,7 @@ function recipeText(r) {
 }
 
 function getRecipeImage(r) {
-  return r.image ? `images/${r.image}` : "placeholder.jpg";
+  return r.image ? `images/${r.image_name}` : "placeholder.jpg";
 }
 
 // ================= SEARCH =================
