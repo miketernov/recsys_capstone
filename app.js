@@ -1,29 +1,26 @@
 // ================= CONFIG =================
 const TOTAL_CHUNKS = 17;
-const USE_SINGLE_FILE = false;
+const USE_SINGLE_FILE = true;
 const RECIPES_FILE = "recipes_all.json";
 
 const ONNX_URL =
   "https://huggingface.co/iammik3e/recsys-minilm/resolve/main/model.onnx";
 
-// Diet exclusions
 const DIET_EXCLUSIONS = {
   vegetarian: ["chicken", "beef", "pork", "fish", "meat", "bacon", "ham"],
   vegan: [
     "meat", "chicken", "beef", "fish",
-    "milk", "cheese", "egg", "butter", "cream", "yogurt", "honey"
+    "milk", "cheese", "egg", "butter", "cream"
   ],
-  nopork: ["pork", "bacon", "ham", "prosciutto", "salami", "pepperoni"]
+  nopork: ["pork", "bacon", "ham"]
 };
 
 // ================= STATE =================
 let recipes = [];
 let session = null;
 let tokenizer = null;
+let ort = null;
 let ready = false;
-
-// ONNX Runtime from global
-const ort = window.ort;
 
 // ================= UI =================
 const loading = document.getElementById("loading");
@@ -35,6 +32,25 @@ const topN = document.getElementById("topN");
 const dietVegetarian = document.getElementById("dietVegetarian");
 const dietVegan = document.getElementById("dietVegan");
 const dietNoPork = document.getElementById("dietNoPork");
+
+// ================= ONNX RUNTIME (СТАРЫЙ РАБОЧИЙ ВАРИАНТ) =================
+async function loadONNXRuntime() {
+  try {
+    const m = await import(
+      "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.wasm.min.js"
+    );
+    ort = m.default || m;
+    if (ort?.InferenceSession) return ort;
+  } catch {}
+
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src =
+      "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.wasm.min.js";
+    s.onload = () => window.ort ? resolve(window.ort) : reject();
+    document.head.appendChild(s);
+  });
+}
 
 // ================= TOKENIZER =================
 async function loadTokenizer() {
@@ -49,7 +65,6 @@ async function loadTokenizer() {
 function tokenize(text) {
   text = text.toLowerCase().replace(/[^a-z0-9 ]+/g, " ");
   const tokens = text.split(" ").filter(Boolean);
-
   const ids = tokens.map(t => tokenizer.vocab[t] ?? tokenizer.vocab["[UNK]"]);
   const cls = tokenizer.vocab["[CLS]"] ?? 0;
 
@@ -67,45 +82,10 @@ function makeTensor(ids) {
 
 // ================= MODEL =================
 async function loadModel() {
-  if (!ort) {
-    throw new Error("ONNX Runtime not loaded");
-  }
-
+  ort = await loadONNXRuntime();
   session = await ort.InferenceSession.create(ONNX_URL, {
     executionProviders: ["wasm"]
   });
-}
-
-// ================= EMBEDDING =================
-async function embed(text) {
-  const tok = tokenize(text);
-
-  const mask = new BigInt64Array(128);
-  for (let i = 0; i < tok.len; i++) mask[i] = 1n;
-
-  const out = await session.run({
-    input_ids: makeTensor(tok.ids),
-    attention_mask: new ort.Tensor("int64", mask, [1, 128]),
-    token_type_ids: new ort.Tensor(
-      "int64",
-      new BigInt64Array(128),
-      [1, 128]
-    )
-  });
-
-  const key = Object.keys(out)[0];
-  const data = out[key].data;
-  const hidden = out[key].dims[2];
-
-  // mean pooling
-  const emb = new Array(hidden).fill(0);
-  for (let i = 0; i < hidden; i++) {
-    for (let j = 0; j < tok.len; j++) {
-      emb[i] += data[j * hidden + i];
-    }
-    emb[i] /= tok.len;
-  }
-  return emb;
 }
 
 // ================= DATA =================
@@ -126,6 +106,36 @@ async function loadChunks() {
   recipes = parts.flat();
 }
 
+// ================= EMBEDDING =================
+async function embed(text) {
+  const tok = tokenize("Ingredients: " + text);
+  const mask = new BigInt64Array(128);
+  for (let i = 0; i < tok.len; i++) mask[i] = 1n;
+
+  const out = await session.run({
+    input_ids: makeTensor(tok.ids),
+    attention_mask: new ort.Tensor("int64", mask, [1, 128]),
+    token_type_ids: new ort.Tensor(
+      "int64",
+      new BigInt64Array(128),
+      [1, 128]
+    )
+  });
+
+  const key = Object.keys(out)[0];
+  const data = out[key].data;
+  const hidden = out[key].dims[2];
+
+  const emb = new Array(hidden).fill(0);
+  for (let i = 0; i < hidden; i++) {
+    for (let j = 0; j < tok.len; j++) {
+      emb[i] += data[j * hidden + i];
+    }
+    emb[i] /= tok.len;
+  }
+  return emb;
+}
+
 // ================= UTILS =================
 function cosine(a, b) {
   let d = 0, na = 0, nb = 0;
@@ -139,7 +149,9 @@ function cosine(a, b) {
 
 function recipeText(r) {
   const t = (r.title || "").toLowerCase();
-  const i = Array.isArray(r.ingredients) ? r.ingredients.join(" ").toLowerCase() : "";
+  const i = Array.isArray(r.ingredients)
+    ? r.ingredients.join(" ").toLowerCase()
+    : "";
   return `${t} ${i}`;
 }
 
@@ -149,10 +161,7 @@ function getRecipeImage(r) {
 
 // ================= SEARCH =================
 async function recommend() {
-  if (!ready) {
-    alert("Model is still loading, please wait");
-    return;
-  }
+  if (!ready) return;
 
   const query = ingredientsInput.value.trim();
   if (!query) return;
@@ -165,7 +174,7 @@ async function recommend() {
   loading.textContent = "Encoding…";
   results.innerHTML = "";
 
-  const userEmb = await embed("Ingredients: " + query);
+  const userEmb = await embed(query);
 
   const filtered = excluded.length
     ? recipes.filter(r =>
@@ -183,28 +192,25 @@ async function recommend() {
   results.innerHTML = "";
 
   scored.forEach(({ r, score }) => {
-    const title = r.title || "Untitled recipe";
-    const ing = Array.isArray(r.ingredients) ? r.ingredients.join(", ") : "";
-    const instr = r.instructions || "";
-
     results.innerHTML += `
       <div class="recipe-card">
         <img
           src="${getRecipeImage(r)}"
-          alt="${title}"
           onerror="this.src='placeholder.jpg'"
         >
         <div class="card-body">
-          <h3>${title}</h3>
+          <h3>${r.title}</h3>
           <div class="score">Similarity: ${score.toFixed(3)}</div>
-          <div class="ingredients">${ing}</div>
 
-          ${instr ? `
-            <details>
-              <summary>Instructions</summary>
-              <p class="instructions">${instr}</p>
-            </details>
-          ` : ""}
+          <div class="ingredients">
+            <strong>Ingredients:</strong><br>
+            ${r.ingredients.join(", ")}
+          </div>
+
+          <details>
+            <summary>Recipe</summary>
+            <p class="instructions">${r.instructions}</p>
+          </details>
         </div>
       </div>
     `;
